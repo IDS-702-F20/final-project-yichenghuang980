@@ -1,0 +1,260 @@
+
+---
+title: "Final Project"
+author: "Wilson Huang"
+date: "11/16/2020"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(pander)
+library(tidyverse)
+library(car)
+library(arm)
+library(pROC)
+library(caret)
+library(e1071)
+library(png)
+library(grid)
+```
+
+* * *
+# Summary
+
+This report mainly addresses three questions. The first is whether different game genre receive different community review. The second is whether the original price affects community review and whether such effect varies across other game features. The last is finding other factors that affect odds of receiving positive review. Multiple logistic regression is used to model how different games features affect community review since the response variable is collapsed into binary format. And stepwise selection from AIC perspective and anova chi-square test are utilized to determine variables in the model.
+
+This study reveals that RPG games are likely to have higher odds of positive review than Action games. Under 90% confidence level, the estimated odds ratio is within [1.04, 2.06]. Also, original_price does affect the odds and such effect varies across different game genres. Among them, Simulation and RPG games are seeing larger decrease in odds. In addition, being offered free is likely to undermine community review and different languages supported like Russian are likely to impose different effects on community review.
+
+```{r echo=FALSE}
+review <- read.csv("C:/Users/renha/Desktop/IDS702/review.csv", sep = ',', stringsAsFactors = TRUE)
+review <- review[, -c(7)]
+review$review <- revalue(review$review, c("True"=1, "False"=0))
+review$review <- as.factor(review$review)
+```
+
+# Introduction
+
+STEAM is a video game digital distribution service by Valve. It contains all kinds of community services and among them, the most important one is the review on games. By studying these reviews, manufacturers can know what to improve, generate sales overview based on pre-sale reviews, and decide DLC or music tracks to make profits. In addition, users can learn whether it is worthwhile to purchase specific games. One important benchmark for classifying community review is the proportion of positive review. Intuitively, assuming the game needs to be purchased, if it is favored by a larger proportion of users, it is likely to bring more positive review and get popular with users.
+
+# Data
+
+## Data Preprocessing
+
+```{r include=FALSE}
+summary(review)
+```
+
+The original dataset contains over 30k observations about STEAM games before June 2019. Around 2000 observations have all the column values missing since they are mostly DLC (Downloadable Contents), duplicated bundle, and music tracks. Since the goal here is to explore factors affecting the odds of positive community review on games, these rows are simply dropped. Also, there are several outliers in achievements and original_price. For example, Casino Simulator has 5000 duplicated achievements and Euro Truck Simulator Bundle is priced at $3000. These observations are also dropped in order to eliminate unwanted bias in regression. In addition, all the games collected support English so this variable is dropped. Furthermore, the original categories of response variable, review, include several levels such as very negative (13% of users vote positive) and mixed (61% of users vote positive). Given that STEAM labels labels "Mixed" to any games whose positive review proportion is within [30%, 70%], most of the game reviews are clustered in group "Mixed" and the number of observations in different levels is highly unbalanced. In order to reduce the imbalance, review categories are collpased into two: positive = 1 and negative = 0 using the benchmark 50% and the number becomes closer to each other.
+
+Cleaned data contains predictors such as game genre, original_price, languages supported, and cloud services.
+ 
+## Explanatory Data Analysis
+
+To understand the baseline probability of positive review, a table with probability of different levels in review is constructed. The result shows that the baseline probability of positive review is around 88%. Conditional probability tables are also constructed.
+
+### review vs cloud
+
+There might be association between review and cloud since as a game switch from not having cloud backups to having cloud backups, the conditional probability of having positive review increases. The chi-square independent test afterwards verifies such association. However, it still needs to be examined in the final regression model. (Please refer to the appendix for detailed tables)
+
+```{r significant, include=FALSE, out.width="50%"}
+apply(table(review[,c("review","cloud")])/sum(table(review[,c("review","cloud")])), # cloud higher
+      2,function(x) x/sum(x))                                                                 
+```
+
+### review vs other predictors
+
+Fro other categorical variables, there appears to be association with the response variable in game genre, mature_content, free, controller, Spanish, and Portuguese. Among those game genres, Adventure and RPG games tend to have higher probability of receiving positive review. Also, being offered free might decrease the odds of positive review. For continuous variable, original_price, achievements, and totalLan display possible association with the response variable. As original price increases, the odds of positive review might increase. More languages supported might increase the odds of positive review.
+
+However, these association are not certain and need further examination in the model part.
+
+```{r include=FALSE}
+apply(table(review[,c("review","genre")])/sum(table(review[,c("review","genre")])), # Action, RPG, and Adventure higher
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","mature_content")])/sum(table(review[,c("review","mature_content")])), #mature higher
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","free")])/sum(table(review[,c("review","free")])),  # free lower
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","controller")])/sum(table(review[,c("review","controller")])), # higher for controller
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","Spanish")])/sum(table(review[,c("review","Spanish")])), # higher for Spanish
+      2,function(x) x/sum(x)) 
+apply(table(review[,c("review","Portuguese")])/sum(table(review[,c("review","Portuguese")])), # higher for Portuguese
+      2,function(x) x/sum(x))
+```
+```{r include=FALSE}
+#For continuous variables
+ggplot(data = review, aes(x=review, y=achievements)) + geom_boxplot() + facet_wrap(~genre) # achievements:genre
+ggplot(data = review, aes(x=review, y=totalLan)) + geom_boxplot() + facet_wrap(~genre) # totalLan:genre
+```
+```{r insignificant,include=FALSE}
+apply(table(review[,c("review","multi_player")])/sum(table(review[,c("review","multi_player")])),
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","trading_cards")])/sum(table(review[,c("review","trading_cards")])),
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","online")])/sum(table(review[,c("review","online")])),
+      2,function(x) x/sum(x))                                                             
+apply(table(review[,c("review","Chinese")])/sum(table(review[,c("review","Chinese")])),
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","Russian")])/sum(table(review[,c("review","Russian")])),
+      2,function(x) x/sum(x))                                                                 
+apply(table(review[,c("review","German")])/sum(table(review[,c("review","German")])),
+      2,function(x) x/sum(x))
+apply(table(review[,c("review","discount")])/sum(table(review[,c("review","discount")])),
+      2,function(x) x/sum(x))
+```
+
+### interaction effect
+
+It appears that the association between original price and review differs by game genre. It corresponds to intuition since game genres like Adventure are the top choice for 3A games. Changes in original price for different games might bring different result.
+
+![](interaction.png){height=20%}
+
+```{r include=FALSE}
+#ggplot(data = review, aes(x=review, y=original_price)) + geom_boxplot() + facet_wrap(~genre) # # original_price:genre
+```
+
+Also, there is possible interaction between totalLan and genre. intuitively, more languages supported in games such as Strategy and RPG might make the game more popular since such game genre requires heavy reading and users might be more satisfied if they do not need to find third-party translation mod to facilitate gaming. To generate a more solid conclusion about interaction terms, these potential interaction terms are examined in the model selection.
+
+# Model
+
+## Model Selection
+
+Since I am looking for association and inference about probability, multiple logistic regression model is appropriate here. The model selection follows two methodologies: AIC stepwise selection and ANOVA chi-square test.
+
+```{r include=FALSE, warning=FALSE}
+cov_names <- names(review)
+p_formula <- as.formula(paste("review ~ ",
+                        paste(cov_names[!cov_names %in% c("review","name","English")],
+                              collapse = " + ")))
+null <- glm(review ~ 1, data = review, family = binomial)
+fit <- glm(p_formula, data = review, family = binomial)
+#selection <- step(fit, scope = formula(null), direction = 'both', trace = 0)
+```
+
+The results drop variables such as achievements and online. To make sure that they are indeed negligible, anova chi-square test is performed and I incrementally test each element against the baseline AIC model.
+
+Those individual predictors dropped by the stepwise selection such as achievements (0.1629) and mature_content have poor performance (0.8159) on ANOVA test (p-value > 0.05), which indicates they can be excluded from the model. Even though total number of languages vs genre appeared significant in EDA, assessment found the term negligible (p-value = 0.478). Original_price vs genre is indeed significant with p-value = 0.0097. Therefore, it is included.
+
+## Final Model
+
+According to VIF, other than interaction term, there is suspicious multicollinearity if totalLan is included (4.169). Therefore, totalLan is dropped since the variables already include each individual language.
+
+Here is the final logistic model:
+
+$$log(\frac{\pi_i}{1-\pi_i}) = \beta_0 + \beta_1genre + \beta_2original\_price + \beta_3totalComments + \beta_4free + \beta_5discount + \beta_6trading\_cards + \beta_7controller $$
+$$+ \beta_8cloud + \beta_9Russian + \beta_{10}Spanish + \beta_{11}German + \beta_{12}original\_price:genre$$
+
+```{r echo=FALSE, warning=FALSE}
+cov_names <- names(review)
+final_formula <- as.formula(paste("review ~ original_price:genre +",
+                        paste(cov_names[!cov_names %in% c("review","name","English", "achievements", "mature_content","Chinese","Portuguese","multi_player","online","totalLan")],
+                              collapse = " + ")))
+final <- glm(final_formula, data = review, family = binomial)
+```
+
+```{r include=FALSE,warning=FALSE}
+cov_names <- names(review)
+p_formularaw <- as.formula(paste("review ~ ",
+                        paste(cov_names[!cov_names %in% c("review","name","English")],
+                              collapse = " + ")))
+raw <- glm(p_formularaw, data = review, family = binomial)
+#vif(raw)
+```
+
+At 0.1 significance level, the significant predictors in the final model are genre, original_price, free, discount, trading_cards, controller, cloud, Russian, Spanish, German, and the interaction term original_price:genre.
+
+```{r include=FALSE}
+#pander(summary(final))
+#summary(final)
+```
+
+![](regression.png){height=30%}
+
+Holding other factors constant and under 90% confidence level, compared with Action games, odds of positive review is expected to be
+
+1) 23% higher for Adventure games 2) 39% higher for Casual games 3) 45% higher for RPG games 4) 21% higher for Strategy games
+
+one unit increase in original price is expected to increase the odds of positive review by 0.9%.
+
+free games is expected to have 13% lower odds of positive review than charged games.
+
+compared with not supporting, odds of positive review is expected to be
+
+1) 30% higher for controller 2) 20% lower for Russian 3) 37% higher for Spanish 4) 16% lower for German
+
+Interaction: compared with Action games, one unit increase in original price is expected to 
+
+1) decrease by 1.57% for Simulation games 2) decrease by 1.59% for Strategy games
+
+Therefore, in the context, 
+
+1. Game genre does affect the odds of positive review. RPG games are expected to have the highest odds which is 48% higher while Action games have the lowest odds. The odds ratio for RPG and Action games is expected to be within [1.04, 2.06] under 90% confidence level.
+
+2. There is association between original price and community review and one unit increase in original price is expected to increase the odds of positive review by 0.9%. Such association differs by game genre. Compared with Action games, one unit increase in original price of Simulation games is expected to decrease the odds by 1.57% while for Strategy games, the odds is expected to decrease by 1.59%.
+
+3. Being offered free (13% lower) is likely to undermine people's review about the game. Supporting controller is likely to increase the odds of positive review by 30%. In addition, supporting Russian is likely to undermine the odds of positive review by 20%.
+
+## Model Assessent
+
+From the overall binned residual plot, there is no discernible pattern and more than 95% of data points are within SE bands. The same conclusion applies to individual binned residual plots for original_price and totalComments.
+
+```{r echo=FALSE,fig.height=4,fig.width=15}
+resid <- residuals(final,"resp")
+par(mfrow=c(1,3))
+binnedplot(x=fitted(final),y=resid,xlab="Pred. probabilities",
+           col.int="red4",ylab="Avg. residuals",main="Binned residual plot",col.pts="navy")
+
+binnedplot(x=review$original_price,y=resid,xlab="original_price",col.int="red4",ylab="Avg. residuals",main="Binned residual plot",col.pts="navy")
+binnedplot(x=review$totalLan,y=resid,xlab="totalComments",col.int="red4",ylab="Avg. residuals",main="Binned residual plot",col.pts="navy")
+```
+
+Also, there is no risk of multicollinearity since the vif results are now all under 5.
+
+![](vif_final.png){height=20%}
+
+## Model Validation
+
+The accuracy is 0.682 and the sensitivity is 0.708.
+
+```{r include=FALSE}
+review$review_num <- as.numeric(review$review) - 1
+mean(review$review_num)
+```
+
+```{r include=FALSE}
+Conf_mat <- confusionMatrix(as.factor(ifelse(fitted(final) >= 0.9, "1","0")),
+                            as.factor(review$review),positive = "1")
+Conf_mat$table
+Conf_mat$overall["Accuracy"];
+Conf_mat$byClass[c("Sensitivity","Specificity")] #True positive rate and True negative rate
+```
+
+## ROC curve
+
+```{r include=FALSE,message=FALSE,warning=FALSE,out.width="50%"}
+invisible(roc(review$review,fitted(final),plot=T,print.thres="best",print.auc=T,legacy.axes=T,col="red3"))
+invisible(roc(review$review,fitted(raw),plot=T,legacy.axes=T,add=T,col="blue3"))
+legend('bottomright', c('final','raw'),lty=c(1,1),
+       lwd=c(2,2),col=c('red3','blue3'))
+```
+
+![](ROC.png){width=60%}
+
+At optimal decision threshold, sensitivity increases to 0.514 and 1-specificity reduces to 0.620 and AUC is 0.587. The final model is slightly better than the raw model. Among all positive cases classified, 51.4 percent are indeed positive. For all negative cases classified, 62 percent are falsely classified. Compared to the benchmark of 0.5 (no diagnostic ability), AUC at 0.587 indicates some diagnostic ability but the performance is not ideal.
+
+# Conclusion
+
+This report reveals that game genre does affect the odds of positive review and Adventure and RPG games have the highest odds. Also, the association between original price and positive review differs by game genre. To be specific, Simulation and Strategy games see higher decrease in odds as price goes up since these game genres are used by small/medium games more. In addition, being offered free is expected to undermine people's review about the game, which is verified by Mtenga's research that people tend to value less on free goods. Furthermore, odds of positive review for games supporting Russian is generally lower maybe because Russia is known for being a region where average price is lower and piracy is rampant. Users holding copyrighted games give negative review to alarm producers about these issues.
+
+There are mainly two limitations. One is that with almost every column value missing, much information about INDIE games (games produced by independent studios) is excluded. As a matter of fact, INDIE games are important component of STEAM so it is limited to large/3A games. Another limitation is that sometimes, negative review is given to online games whose server periodically shuts down. Also, people simply give negative review when steam restricts them from purchasing. Such phenomena is not modeled.
+
+* * *
